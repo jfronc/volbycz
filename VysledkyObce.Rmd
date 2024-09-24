@@ -1,0 +1,62 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, results = "asis")
+
+xfun::pkg_attach("tidyverse", "magrittr", "xml2", "kableExtra")
+
+get_xml <- function (nuts) {
+  base_url <- "https://www.volby.cz/appdata/kz2024/odata/okresy/vysledky_okres_"
+  xml <- paste0(base_url, nuts, ".xml") %>% read_xml()
+  return(xml)
+}
+
+dec <- get_xml("CZ0421")
+ltm <- get_xml("CZ0423")
+
+kzrkl <- readxl::read_excel("kzrkl.xlsx") # číselník
+ns <- c(default = "http://www.w3.org/namespace/")
+
+town_vote <- function (xml, town) {
+  cat("::: {} \n\n")
+  cat("#### ", town, " \n")
+  
+  res <- xml %>%
+    xml_find_first(paste0(".//default:OBEC[@NAZ_OBEC='", town, "']"), ns)
+  
+  ucast <- xml_find_first(res, "default:UCAST", ns)
+  paste0("Spočteno: ", xml_attr(ucast, "OKRSKY_ZPRAC"), "/", xml_attr(ucast, "OKRSKY_CELKEM"), " (", xml_attr(ucast, "OKRSKY_ZPRAC_PROC"), " %)") %>% cat()
+  
+  hlasy <- xml_find_all(res, ".//default:HLASY_STRANA", ns) %>%
+    map( ~{
+                     list(
+                       KSTRANA = xml_attr(.x, "KSTRANA") %>% as.double(),
+                       PROC_HLASU = xml_attr(.x, "PROC_HLASU") %>% as.numeric()
+                     )
+                   }) %>% bind_rows()
+                   
+  hlasy %<>% left_join(kzrkl) %>% arrange(desc(PROC_HLASU)) %>% filter(PROC_HLASU > 3) 
+
+  hlasy$BARVA %<>% ifelse(is.na(.), "#000000", .)                                
+  
+  hlasy %>% select(ZKRATKAK30, PROC_HLASU) %>% kbl(col.names = NULL) %>%
+    column_spec(1, color = hlasy$BARVA) %>% cat()
+  
+  cat("\n::: \n")
+  
+}
+```
+:::: {style="display: flex; flex-wrap: wrap; grid-column-gap: 30px;"}
+
+```{r towns, error = TRUE}
+town_vote(ltm, "Litoměřice")
+town_vote(ltm, "Lovosice")
+town_vote(ltm, "Roudnice nad Labem")
+town_vote(dec, "Děčín")
+town_vote(dec, "Rumburk")
+town_vote(dec, "Krásná Lípa")
+```
+
+::::
