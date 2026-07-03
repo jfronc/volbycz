@@ -1,115 +1,113 @@
 ---
+params:
+  so: 33
+  volby_date: "20201002"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE)
-
 xfun::pkg_attach("tidyverse", "magrittr", "xml2")
 
-so = 5 # číslo senátního obvodu
-
+so <- params$so
+volby_date <- params$volby_date
+ns <- c(default = "http://www.volby.cz/senat/")
 ```
+
 # Senátní obvod č. `r so`
-```{r}
-get_xml <- function (so) {
-  base_url <- "https://www.volby.cz/appdata/senat/20240920/odata/obvody/vysledky_obce_obvod_"
-  xml <- paste0(base_url, so, ".xml") %>% read_xml()
-  return(xml)
+
+```{r data-fetch}
+get_obvod_xml <- function(so, volby_date) {
+  paste0("https://www.volby.cz/appdata/senat/", volby_date, "/odata/obvody/vysledky_obce_obvod_", so, ".xml")|> read_xml()
 }
 
-ns <- c(default = "http://www.volby.cz/senat/")
+res <- read_xml(paste0("https://www.volby.cz/appdata/senat/", volby_date, "/odata/vysledky.xml")) %>%
+  xml_find_first(paste0(".//default:OBVOD[@CISLO='", so, "']"), ns)
 
-  res <- read_xml("https://www.volby.cz/appdata/senat/20240920/odata/vysledky.xml") %>%
-    xml_find_first(paste0(".//default:OBVOD[@CISLO='", so, "']"), ns)
-  res_towns <- get_xml(so = so)
-  
-  poradi <- res %>%
-    xml_find_all("default:KANDIDAT", ns) %>%
-    map( ~{
-      list(
-        PORADOVE_CISLO = xml_attr(.x, "PORADOVE_CISLO"),
-        NAME = paste(xml_attr(.x, "JMENO"), xml_attr(.x, "PRIJMENI")),
-        HLASY_1KOLO = xml_attr(.x, "HLASY_1KOLO") %>% as.numeric(),
-        ZVOLEN_1KOLO = xml_attr(.x, "ZVOLEN_1KOLO")
-      )
-    }) %>% bind_rows() %>% arrange(desc(HLASY_1KOLO)) %>% slice(1:4) %>% rowwise()
-  
-  obce <- xml_find_all(res_towns, ".//default:OBEC", ns) %>%
-    map( ~{
-      list(
-        NAZ_OBEC = xml_attr(.x, "NAZ_OBEC"),
-        VYDANE_OBALKY1 = xml_find_first(.x, ".//default:UCAST", ns) %>% xml_attr("VYDANE_OBALKY") %>% as.numeric,
-        VYDANE_OBALKY2 = xml_find_first(.x, ".//default:UCAST[@KOLO='2']", ns) %>% xml_attr("VYDANE_OBALKY") %>% as.numeric()
-      )
-    }) %>% bind_rows() %>% arrange(desc(VYDANE_OBALKY1)) %>% slice(1:5)
-  
-  poradi1 = poradi
-  
-  for (i in seq_along(obce$NAZ_OBEC)) {
-    name = obce$NAZ_OBEC[i]
-    poradi1 %<>% mutate(
-      {{name}} := res_towns %>%
-        xml_find_first(paste0(".//default:OBEC[@NAZ_OBEC='", !!name, "']"), ns) %>%
-        xml_find_first(paste0(".//default:HLASY[@PORADOVE_CISLO='", PORADOVE_CISLO, "']"), ns) %>%
-        xml_attr("HLASY_1KOLO") %>%
-        as.numeric()
-    )
+res_towns <- get_obvod_xml(so, volby_date)
+
+poradi <- res %>%
+  xml_find_all("default:KANDIDAT", ns) %>%
+  map(~ list(
+    PORADOVE_CISLO  = xml_attr(.x, "PORADOVE_CISLO"),
+    NAME            = paste(xml_attr(.x, "JMENO"), xml_attr(.x, "PRIJMENI")),
+    HLASY_1KOLO     = as.numeric(xml_attr(.x, "HLASY_1KOLO")),
+    ZVOLEN_1KOLO    = xml_attr(.x, "ZVOLEN_1KOLO")
+  )) %>%
+  bind_rows() %>%
+  arrange(desc(HLASY_1KOLO)) %>%
+  slice(1:4)
+
+# Guard against < 5 towns
+n_towns <- min(5, xml_find_all(res_towns, ".//default:OBEC", ns) %>% length())
+
+obce <- xml_find_all(res_towns, ".//default:OBEC", ns) %>%
+  map(~ list(
+    NAZ_OBEC       = xml_attr(.x, "NAZ_OBEC"),
+    VYDANE_OBALKY1 = xml_find_first(.x, ".//default:UCAST", ns) %>% xml_attr("VYDANE_OBALKY") %>% as.numeric(),
+    VYDANE_OBALKY2 = xml_find_first(.x, ".//default:UCAST[@KOLO='2']", ns) %>% xml_attr("VYDANE_OBALKY") %>% as.numeric()
+  )) %>%
+  bind_rows() %>%
+  arrange(desc(VYDANE_OBALKY1)) %>%
+  slice(1:n_towns)
+```
+
+```{r helper-functions}
+# Pull per-town vote counts for each candidate, for a given round's vote attribute
+add_town_votes <- function(poradi_df, town_names, vote_attr) {
+  for (name in town_names) {
+    poradi_df <- poradi_df %>%
+      rowwise() %>%
+      mutate(
+        !!name := res_towns %>%
+          xml_find_first(paste0(".//default:OBEC[@NAZ_OBEC='", name, "']"), ns) %>%
+          xml_find_first(paste0(".//default:HLASY[@PORADOVE_CISLO='", PORADOVE_CISLO, "']"), ns) %>%
+          xml_attr(vote_attr) %>%
+          as.numeric()
+      ) %>%
+      ungroup()
   }
-  
-  poradi1 %>%
-    # Calculate the rest of votes based on the positions of town columns
-    mutate(Rest = HLASY_1KOLO - sum(c_across(5:ncol(.)))) %>%
-    ungroup() %>%
-    # Pivot the town columns and "Rest" column to long format
-    pivot_longer(cols = c(5:9, Rest), 
-                 names_to = "Town", 
-                 values_to = "Votes") %>%
-    # Ensure the x-axis (candidates) is ordered by row position
-    mutate(NAME = factor(NAME, levels = poradi1$NAME),
-           # Invert the town order by reversing the levels
-           Town = factor(Town, levels = rev(c(names(poradi1)[5:9], "Rest")))) %>%
+  poradi_df
+}
+
+# Build the stacked bar chart, summing "Rest" from the actual town columns
+plot_votes_by_town <- function(df, total_col, town_names, title) {
+  df <- df %>%
+    rowwise() %>%
+    mutate(Rest = .data[[total_col]] - sum(c_across(all_of(town_names)))) %>%
+    ungroup()
+
+  df %>%
+    pivot_longer(cols = c(all_of(town_names), Rest), names_to = "Town", values_to = "Votes") %>%
+    mutate(
+      NAME = factor(NAME, levels = df$NAME),
+      Town = factor(Town, levels = rev(c(town_names, "Rest")))
+    ) %>%
     ggplot(aes(x = NAME, y = Votes, fill = Town)) +
     geom_bar(position = "stack", stat = "identity", width = 0.5) +
-    labs(title = "Počty hlasů v 1. kole podle obcí",
-         x = "Kandidáti",
-         y = "Hlasy") +
-    theme_minimal() %>% return()
-  
-  poradi2 = poradi %>% filter(ZVOLEN_1KOLO == "2.KOLO") %>%
-    mutate(HLASY_2KOLO = res %>%
-             xml_find_first(paste0("default:KANDIDAT[@PORADOVE_CISLO='", PORADOVE_CISLO, "']"), ns) %>%
-             xml_attr("HLASY_2KOLO") %>% as.numeric())
-  
-  for (i in seq_along(obce$NAZ_OBEC)) {
-    name = obce$NAZ_OBEC[i]
-    poradi2 %<>% mutate(
-      {{name}} := res_towns %>%
-        xml_find_first(paste0(".//default:OBEC[@NAZ_OBEC='", !!name, "']"), ns) %>%
-        xml_find_first(paste0(".//default:HLASY[@PORADOVE_CISLO='", PORADOVE_CISLO, "']"), ns) %>%
-        xml_attr("HLASY_2KOLO") %>%
-        as.numeric()
-    )
-  }
-  
-  poradi2 %>%
-    # Calculate the rest of votes based on the positions of town columns
-    mutate(Rest = HLASY_2KOLO - sum(c_across(6:ncol(.)))) %>%
-    ungroup() %>%
-    # Pivot the town columns and "Rest" column to long format
-    pivot_longer(cols = c(6:10, Rest), 
-                 names_to = "Town", 
-                 values_to = "Votes") %>%
-    # Ensure the x-axis (candidates) is ordered by row position
-    mutate(NAME = factor(NAME, levels = poradi2$NAME),
-           # Invert the town order by reversing the levels
-           Town = factor(Town, levels = rev(c(names(poradi2)[6:10], "Rest")))) %>%
-    ggplot(aes(x = NAME, y = Votes, fill = Town)) +
-    geom_bar(position = "stack", stat = "identity", width = 0.5) +
-    labs(title = "Počty hlasů v 2. kole podle obcí",
-         x = "Kandidáti",
-         y = "Hlasy") +
-    theme_minimal() %>% return()
+    labs(title = title, x = "Kandidáti", y = "Hlasy") +
+    theme_minimal()
+}
+```
 
-# TODO: zjednodušit, Opava, < 4 obce
+```{r round1-chart}
+poradi1 <- add_town_votes(poradi, obce$NAZ_OBEC, "HLASY_1KOLO")
+plot_votes_by_town(poradi1, "HLASY_1KOLO", obce$NAZ_OBEC, "Počty hlasů v 1. kole podle obcí")
+```
+
+```{r round2-chart}
+poradi2 <- poradi %>%
+  filter(ZVOLEN_1KOLO == "2.KOLO") %>%
+  rowwise() %>%
+  mutate(
+    HLASY_2KOLO = res %>%
+      xml_find_first(paste0("default:KANDIDAT[@PORADOVE_CISLO='", PORADOVE_CISLO, "']"), ns) %>%
+      xml_attr("HLASY_2KOLO") %>% as.numeric()
+  ) %>%
+  ungroup()
+
+if (nrow(poradi2) > 0) {
+  poradi2 <- add_town_votes(poradi2, obce$NAZ_OBEC, "HLASY_2KOLO")
+  plot_votes_by_town(poradi2, "HLASY_2KOLO", obce$NAZ_OBEC, "Počty hlasů v 2. kole podle obcí")
+}
 ```
