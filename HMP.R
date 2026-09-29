@@ -173,89 +173,13 @@ if (any(is.na(borough_results$winner_party)))
 # ==============================================================================
 # 7. MAP
 # ==============================================================================
-create_prague_map <- function(results, borough_cache = all_prague_boroughs) {
-  
-  polygons_sf <- borough_cache %>%
-    inner_join(results, by = "borough_code")
-  
-  unmatched_geo <- setdiff(results$borough_code, polygons_sf$borough_code)
-  if (length(unmatched_geo) > 0)
-    warning(sprintf("No geometry for %d borough(s): %s",
-                    length(unmatched_geo), paste(unmatched_geo, collapse = ", ")))
-  
-  bubbles_sf  <- polygons_sf %>% st_centroid()
-  max_margin  <- max(bubbles_sf$abs_vote_margin, na.rm = TRUE)
-  size_breaks <- unique(round(seq(0, max_margin, length.out = 4)))
-  
+prague_map <- create_bubble_map(
+  results  = borough_results,
+  polygons = all_prague_boroughs,
+  palette  = parties_palette,
+  title    = "Volby do zastupitelstva HMP 2022",
+  subtitle = "Vítězové dle MČ. Velikost bubliny = absolutní náskok; sytost = relativní náskok",
+  caption  = "Zdroj: \u010cS\u00da (volby.cz) opendata | Geometrie: RCzechia::casti()"
+)
 
-  missing_parties <- setdiff(unique(bubbles_sf$winner_short), names(parties_palette))
-  if (length(missing_parties) > 0)
-    message("Winners with no palette entry (will render grey): ",
-            paste(missing_parties, collapse = "; "))
-  
-  ggplot() +
-    geom_sf(
-      data = polygons_sf,
-      fill = "#FAFAFA", color = "#DCDCDC", linewidth = 0.4
-    ) +
-    geom_sf_interactive(
-      data = bubbles_sf,
-      aes(
-        size    = abs_vote_margin,
-        fill    = winner_short,
-        alpha   = pct_margin,
-        tooltip = tooltip_text,
-        data_id = borough_code
-      ),
-      shape = 21, color = "#FFFFFF", stroke = 0.4
-    ) +
-    scale_size_area(
-      max_size = 14,
-      limits   = c(0, max_margin),
-      breaks   = size_breaks,
-      labels   = NULL,
-      name   = NULL
-    ) +
-    scale_fill_manual(
-      values   = parties_palette,
-      name     = "Vítěz",
-      na.value = "grey60"
-    ) +  # fill mapped to winner_short (ZKRATKAO8)
-    scale_alpha_continuous(
-      range  = c(0.40, 0.95),
-      labels = NULL,
-      name   = NULL
-    ) +
-    labs(
-      title    = "Volby do zastupitelstva HMP 2022",
-      subtitle = "Vítězové dle MČ. Velikost bubliny = absolutní náskok; sytost = relativní náskok",
-      caption  = "Source: \u010cS\u00da (volby.cz) opendata | Geometry: RCzechia::casti()"
-    ) +
-    theme_minimal(base_family = "sans") +
-    theme(
-      panel.grid      = element_blank(),
-      axis.text       = element_blank(),
-      axis.title      = element_blank(),
-      plot.title      = element_text(face = "bold", size = 13),
-      legend.title    = element_text(face = "bold", size = 11),
-      legend.text     = element_text(size = 10),
-      legend.box      = "vertical",
-      legend.position = "right"
-    ) +
-    coord_sf(datum = NA) ->
-    map_gg
-  
-  girafe(
-    ggobj   = map_gg,
-    options = list(
-      opts_tooltip(css = "background-color:none; border:none; box-shadow:none;"),
-      opts_hover(css   = "stroke:#111111; stroke-width:1.5px; cursor:pointer;"),
-      opts_sizing(rescale = TRUE)
-    ),
-    width_svg  = 7.5,
-    height_svg = 5.5
-  )
-}
-
-prague_map <- create_prague_map(borough_results)
 prague_map
