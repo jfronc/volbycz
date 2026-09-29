@@ -13,9 +13,8 @@ create_bubble_map <- function(results,
     warning(sprintf("No geometry for %d unit(s): %s",
                     length(unmatched_geo), paste(unmatched_geo, collapse = ", ")))
   
-  bubbles_sf  <- polygons_sf %>% st_centroid()
-  max_margin  <- max(bubbles_sf$abs_vote_margin, na.rm = TRUE)
-  size_breaks <- unique(round(seq(0, max_margin, length.out = 4)))
+  bubbles_sf <- polygons_sf %>% st_centroid()
+  max_margin <- max(bubbles_sf$abs_vote_margin, na.rm = TRUE)
   
   missing_parties <- setdiff(unique(bubbles_sf$winner_short), names(palette))
   if (length(missing_parties) > 0)
@@ -41,9 +40,7 @@ create_bubble_map <- function(results,
     scale_size_area(
       max_size = 14,
       limits   = c(0, max_margin),
-      breaks   = size_breaks,
-      labels   = NULL,
-      name     = NULL
+      guide    = "none"
     ) +
     scale_fill_manual(
       values   = palette,
@@ -51,9 +48,8 @@ create_bubble_map <- function(results,
       na.value = "grey60"
     ) +
     scale_alpha_continuous(
-      range  = c(0.40, 0.95),
-      labels = NULL,
-      name   = NULL
+      range = c(0.40, 0.95),
+      guide = "none"
     ) +
     labs(title = title, subtitle = subtitle, caption = caption) +
     theme_minimal(base_family = "sans") +

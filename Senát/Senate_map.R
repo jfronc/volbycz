@@ -2,62 +2,63 @@
 # 1. ENVIRONMENT INITIALIZATION & ONE-TIME GLOBAL LOOKUPS
 # ==============================================================================
 xfun::pkg_attach(c("tidyverse", "magrittr", "xml2", "RCzechia", "sf", "scales", "ggiraph"))
+source("utils/parties.R")
+source("utils/bubble_map.R")
 
 message("Caching administrative shapes from RÚIAN...")
 all_municipalities_polygons <- obce_polygony() %>%
-  select(obec_code = KOD_OBEC, geometry) %>%
-  mutate(obec_code = as.character(obec_code)) %>%
+  select(borough_code = KOD_OBEC, geometry) %>%
+  mutate(borough_code = as.character(borough_code)) %>%
   st_transform(crs = 5514)
 
 all_quarters_polygons <- casti() %>%
-  select(obec_code = KOD, geometry) %>%
-  mutate(obec_code = as.character(obec_code)) %>%
+  select(borough_code = KOD, geometry) %>%
+  mutate(borough_code = as.character(borough_code)) %>%
   st_transform(crs = 5514)
 
-ns <- c(default = "http://www.volby.cz/senat/")
+ns   <- c(default = "http://www.volby.cz/senat/")
 date <- "20201002"
-global_results_url <- paste0("https://volby.gov.cz/appdata/senat/", date, "/odata/vysledky.xml")
 
-xml_global <- tryCatch({
-  read_xml(global_results_url)
-}, error = function(e) {
-  stop("CRITICAL: Failed to download global results registry. Verify connectivity.")
-})
+xml_global <- tryCatch(
+  read_xml(paste0("https://volby.gov.cz/appdata/senat/", date, "/odata/vysledky.xml")),
+  error = function(e) stop("CRITICAL: Failed to download global results registry.")
+)
 
 # ==============================================================================
-# 2. CORE ENGINE: PARAMETERIZED SELECTION & VISUALIZATION FUNCTION
+# 2. CORE ENGINE
 # ==============================================================================
-create_independent_senate_maps <- function(target_so_id, 
+create_senate_map <- function(target_so_id,
                                            municipality_cache = all_municipalities_polygons,
-                                           quarter_cache = all_quarters_polygons,
+                                           quarter_cache      = all_quarters_polygons,
                                            date) {
   
-  xml_district_url <- paste0("https://volby.gov.cz/appdata/senat/", date, "/odata/obvody/vysledky_obce_obvod_", target_so_id, ".xml")
+  xml_district <- tryCatch(
+    read_xml(paste0(
+      "https://volby.gov.cz/appdata/senat/", date,
+      "/odata/obvody/vysledky_obce_obvod_", target_so_id, ".xml"
+    )),
+    error = function(e)
+      stop(sprintf("CRITICAL: Failed to download XML for Senate District %s.", target_so_id))
+  )
   
-  xml_district <- tryCatch({
-    read_xml(xml_district_url)
-  }, error = function(e) {
-    stop(sprintf("CRITICAL: Failed to download XML for Senate District %s.", target_so_id))
-  })
-  
-  # A. Map Candidate Names via Metadata Registry (Deterministic Sequence)
-  district_node <- xml_find_first(xml_global, paste0(".//default:OBVOD[@CISLO='", target_so_id, "']"), ns)
-  if (length(district_node) == 0 || is.na(district_node)) {
+  # A. Candidate registry (deterministic order)
+  district_node <- xml_find_first(
+    xml_global,
+    paste0(".//default:OBVOD[@CISLO='", target_so_id, "']"), ns
+  )
+  if (length(district_node) == 0 || is.na(district_node))
     stop(sprintf("Validation Error: Senate District %s not found in metadata.", target_so_id))
-  }
   
   candidate_registry <- district_node %>%
     xml_find_all("default:KANDIDAT", ns) %>%
-    map(\(cand_node) {
-      tibble(
-        candidate_id   = as.numeric(xml_attr(cand_node, "PORADOVE_CISLO")),
-        candidate_name = paste(xml_attr(cand_node, "JMENO"), xml_attr(cand_node, "PRIJMENI"))
-      )
-    }) %>%
+    map(\(n) tibble(
+      candidate_id   = as.numeric(xml_attr(n, "PORADOVE_CISLO")),
+      candidate_name = paste(xml_attr(n, "JMENO"), xml_attr(n, "PRIJMENI"))
+    )) %>%
     list_rbind() %>%
     arrange(candidate_id)
   
-  # B. Parse District Units Natively into Long Format (Extracting Both Rounds)
+  # B. Parse both rounds into long format
   obec_nodes <- xml_find_all(xml_district, ".//default:OBEC", ns)
   
   election_long <- obec_nodes %>%
@@ -65,161 +66,138 @@ create_independent_senate_maps <- function(target_so_id,
       obec_code <- as.character(xml_attr(obec_node, "CIS_OBEC"))
       obec_name <- xml_attr(obec_node, "NAZ_OBEC")
       
-      ucast_nodes <- xml_find_all(obec_node, ".//default:UCAST", ns)
-      turnout_map <- ucast_nodes %>% 
-        map(\(u) {
-          tibble(
-            kolo = as.numeric(xml_attr(u, "KOLO")),
-            total_turnout = as.numeric(xml_attr(u, "PLATNE_HLASY"))
-          )
-        }) %>% 
+      turnout_map <- xml_find_all(obec_node, ".//default:UCAST", ns) %>%
+        map(\(u) tibble(
+          kolo          = as.numeric(xml_attr(u, "KOLO")),
+          total_turnout = as.numeric(xml_attr(u, "PLATNE_HLASY"))
+        )) %>%
         list_rbind()
       
       hlasy_nodes <- xml_find_all(obec_node, ".//default:HLASY", ns)
       if (length(hlasy_nodes) == 0) return(NULL)
       
       hlasy_nodes %>%
-        map(\(h) {
-          tibble(
-            candidate_id = as.numeric(xml_attr(h, "PORADOVE_CISLO")),
-            votes_r1     = as.numeric(xml_attr(h, "HLASY_1KOLO")),
-            votes_r2     = as.numeric(xml_attr(h, "HLASY_2KOLO"))
-          )
-        }) %>%
+        map(\(h) tibble(
+          candidate_id = as.numeric(xml_attr(h, "PORADOVE_CISLO")),
+          votes_r1     = as.numeric(xml_attr(h, "HLASY_1KOLO")),
+          votes_r2     = as.numeric(xml_attr(h, "HLASY_2KOLO"))
+        )) %>%
         list_rbind() %>%
-        pivot_longer(
-          cols = c(votes_r1, votes_r2), 
-          names_to = "round_label", 
-          values_to = "votes"
-        ) %>%
-        mutate(kolo = if_else(round_label == "votes_r1", 1, 2)) %>%
+        pivot_longer(c(votes_r1, votes_r2), names_to = "round_label", values_to = "votes") %>%
+        mutate(kolo = if_else(round_label == "votes_r1", 1L, 2L)) %>%
         filter(!is.na(votes), votes > 0) %>%
         inner_join(turnout_map, by = "kolo") %>%
-        mutate(obec_code = obec_code, obec_name = obec_name)
+        mutate(borough_code = obec_code, obec_name = obec_name)
     }) %>%
     keep(~ !is.null(.x)) %>%
-    list_rbind()
+    list_rbind() %>%
+    left_join(candidate_registry, by = "candidate_id")
   
-  election_long %<>% left_join(candidate_registry, by = "candidate_id")
-  
-  # C. Compute Top 3 for Tooltips Fallback Context
+  # C. Top-3 tooltip table (NYT style, matching KV map)
   top3_tooltips <- election_long %>%
-    mutate(pct = votes / total_turnout) %>%
-    group_by(obec_code, kolo) %>%
+    group_by(borough_code, kolo) %>%
     arrange(desc(votes), .by_group = TRUE) %>%
+    mutate(pct = votes / total_turnout) %>%
     slice_head(n = 3) %>%
     summarise(
       rank_html = paste0(
-        "<div style='margin-top: 5px; border-top: 1px solid #EEEEEE; padding-top: 5px;'>",
-        paste0("<span style='font-size: 11px;'>", row_number(), ". ", candidate_name, 
-               ": <strong>", round(pct * 100, 1), "%</strong></span>", collapse = "<br/>"),
-        "</div>"
+        "<table style='border-collapse:collapse; width:230px; margin-top:6px;",
+        " border-top:2px solid #E2E2E2; font-family:Georgia,serif;'>",
+        "<tr style='font-size:10px; color:#999999;'>",
+        "<td style='padding:2px 6px 2px 0; width:100%;'>Kandidát</td>",
+        "<td style='padding:2px 4px; text-align:right;'>Hlasy</td>",
+        "<td style='padding:2px 0 2px 4px; text-align:right;'>%</td>",
+        "</tr>",
+        paste0(
+          "<tr style='font-size:12px;'>",
+          "<td style='padding:3px 6px 3px 0;'>",
+          "<span style='display:inline-block; width:4px; height:14px;",
+          " background-color:#AAAAAA",          # candidates have no fixed party colour
+          "; margin-right:5px; vertical-align:middle; border-radius:1px;'></span>",
+          candidate_name, "</td>",
+          "<td style='padding:3px 4px; text-align:right; color:#444444;'>",
+          format(votes, big.mark = "\u00a0"), "</td>",
+          "<td style='padding:3px 0 3px 4px; text-align:right; font-weight:bold;",
+          " white-space:nowrap;'>",
+          round(pct * 100, 1), " %</td>",
+          "</tr>",
+          collapse = ""
+        ),
+        "</table>"
       ),
       .groups = "drop"
     )
   
-  # D. Analytical Processing Matrix: Calculate Margins Per Round Natively
+  # D. Margins per round
   processed_rounds <- election_long %>%
-    group_by(obec_code, obec_name, kolo) %>%
+    group_by(borough_code, obec_name, kolo) %>%
     arrange(desc(votes), .by_group = TRUE) %>%
     summarise(
-      # CRITICAL FIX: Ensure total_turnout is reduced to a vector of length 1
       abs_vote_margin = if_else(n() > 1, first(votes) - nth(votes, 2), first(votes)),
-      pct_margin      = abs_vote_margin / first(total_turnout), 
-      leader_name     = first(candidate_name),
+      pct_margin      = abs_vote_margin / first(total_turnout),
+      winner_short    = first(candidate_name),   # candidate name as the fill key
       total_turnout   = first(total_turnout),
       .groups = "drop"
     ) %>%
-    left_join(top3_tooltips, by = c("obec_code", "kolo")) %>%
+    left_join(top3_tooltips, by = c("borough_code", "kolo")) %>%
     mutate(
       tooltip_text = paste0(
-        "<div style='font-family:sans-serif; padding:10px; background-color:#FFFFFF; border:1px solid #CCCCCC; border-radius:4px;'>",
-        "<strong>", obec_name, "</strong> (Kolo ", kolo, ")<br/>",
-        "Leader: <strong>", leader_name, "</strong><br/>",
-        "Lead Margin: <strong>", format(abs_vote_margin, big.mark = " "), " votes</strong> (", round(pct_margin * 100, 1), "%)",
+        "<div style='font-family:Georgia,serif; padding:10px 12px; background-color:#FFFFFF;",
+        " border:1px solid #CCCCCC; border-radius:3px;",
+        " box-shadow:0 2px 6px rgba(0,0,0,0.12); min-width:230px;'>",
+        "<div style='font-size:13px; font-weight:bold; color:#111111; margin-bottom:1px;'>",
+        obec_name, " (Kolo ", kolo, ")</div>",
+        "<div style='font-size:10px; color:#999999; margin-bottom:2px;'>",
+        format(total_turnout, big.mark = "\u00a0"), " platných hlasů</div>",
         rank_html,
         "</div>"
       )
     )
   
-  # E. RECONCILE GEOMETRIES (City Quarters vs. Standalone Towns)
-  unique_codes <- unique(processed_rounds$obec_code)
-  district_polygons_sf <- quarter_cache %>% filter(obec_code %in% unique_codes)
-  missing_codes        <- setdiff(unique_codes, district_polygons_sf$obec_code)
+  # E. Geometry reconciliation: quarters first, municipalities as fallback
+  unique_codes         <- unique(processed_rounds$borough_code)
+  district_polygons_sf <- quarter_cache %>% filter(borough_code %in% unique_codes)
+  missing_codes        <- setdiff(unique_codes, district_polygons_sf$borough_code)
   
-  if (length(missing_codes) > 0) {
-    standard_segments <- municipality_cache %>% filter(obec_code %in% missing_codes)
-    district_polygons_sf %<>% bind_rows(standard_segments)
-  }
+  if (length(missing_codes) > 0)
+    district_polygons_sf %<>% bind_rows(
+      municipality_cache %>% filter(borough_code %in% missing_codes)
+    )
   
-  district_bubbles_sf <- district_polygons_sf %>%
-    st_centroid() %>% 
-    inner_join(processed_rounds, by = "obec_code")
+  unresolved <- setdiff(unique_codes, district_polygons_sf$borough_code)
+  if (length(unresolved) > 0)
+    warning(sprintf("%d code(s) matched no geometry: %s",
+                    length(unresolved), paste(unresolved, collapse = ", ")))
   
-  all_candidates    <- unique(district_bubbles_sf$leader_name)
+  # F. Per-round palette (candidates vary by district — generate from data)
+  all_candidates    <- unique(processed_rounds$winner_short)
   candidate_palette <- set_names(scales::hue_pal()(length(all_candidates)), all_candidates)
   
-  # F. INDEPENDENT RENDER GENERATOR CLOSURE
-  build_independent_layer <- function(target_kolo) {
-    round_bubbles <- district_bubbles_sf %>% filter(kolo == target_kolo)
+  # G. Render each round via shared create_bubble_map()
+  build_round <- function(target_kolo) {
+    round_results <- processed_rounds %>% filter(kolo == target_kolo)
     
-    local_max_margin <- max(round_bubbles$abs_vote_margin, na.rm = TRUE)
-    local_breaks     <- round(seq(0, local_max_margin, length.out = 4))
-    
-    map_gg <- ggplot() +
-      geom_sf(data = district_polygons_sf, fill = "#FAFAFA", color = "#E0E0E0", linewidth = 0.35) +
-      geom_sf_interactive(
-        data = round_bubbles,
-        aes(size = abs_vote_margin, fill = leader_name, alpha = pct_margin, tooltip = tooltip_text, data_id = obec_code),
-        shape = 21, color = "#FFFFFF", stroke = 0.4
-      ) +
-      scale_size_area(
-        max_size = 14,
-        limits   = c(0, local_max_margin), 
-        breaks   = local_breaks,
-        labels = NULL,
-        name   = NULL
-      ) +
-      scale_fill_manual(values = candidate_palette, name = "Leading Candidate") +
-      scale_alpha_continuous(range = c(0.40, 0.95),
-                             labels = NULL,
-                             name   = NULL) +
-      labs(
-        title    = paste("Senate Election 2024 — District", target_so_id),
-        subtitle = paste("Round", target_kolo, "— Local independent bubble scale boundaries applied"),
-        caption  = "Source: ČSÚ (volby.cz) | Geometries via RCzechia (casti fallback layer)"
-      ) +
-      theme_minimal(base_family = "sans") +
-      theme(
-        panel.grid = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        plot.title = element_text(face = "bold", size = 13),
-        legend.title = element_text(face = "bold", size = 11),
-        legend.text = element_text(size = 10),
-        legend.box = "vertical", legend.position = "right"
-      ) +
-      coord_sf(datum = NA)
-    
-    girafe(
-      ggobj = map_gg,
-      options = list(
-        opts_tooltip(css = "background-color:none; border:none; box-shadow:none;"),
-        opts_hover(css = "stroke:#111111; stroke-width:1.5px; cursor:pointer;"),
-        opts_sizing(rescale = TRUE)
-      ),
-      width_svg = 7.5, height_svg = 5.5
+    create_bubble_map(
+      results  = round_results,
+      polygons = district_polygons_sf,
+      palette  = candidate_palette,
+      title    = sprintf("Senátní volby — Obvod %s", target_so_id),
+      subtitle = sprintf("Kolo %d — Velikost bubliny = absolutní náskok; sytost = relativní náskok",
+                         target_kolo),
+      caption  = "Zdroj: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
     )
   }
   
-  return(list(
-    round_1 = build_independent_layer(1),
-    round_2 = build_independent_layer(2)
-  ))
+  list(
+    round_1 = build_round(1),
+    round_2 = build_round(2)
+  )
 }
 
-district_maps <- create_independent_senate_maps(target_so_id = 45, date = date)
+# ==============================================================================
+# 3. RUNTIME
+# ==============================================================================
+district_maps <- create_senate_map(target_so_id = 48, date = date)
 
-# Render each round with its own standalone sizing limits
 district_maps$round_1
 district_maps$round_2
