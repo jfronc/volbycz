@@ -1,8 +1,7 @@
 # ==============================================================================
 # 1. ENVIRONMENT INITIALIZATION & ONE-TIME GLOBAL LOOKUPS
 # ==============================================================================
-xfun::pkg_attach(c("tidyverse", "magrittr", "xml2", "RCzechia", "sf", "scales", "ggiraph"))
-source("utils/parties.R")
+xfun::pkg_attach("tidyverse", "magrittr", "xml2", "RCzechia", "sf", "scales", "ggiraph")
 source("utils/bubble_map.R")
 
 message("Caching administrative shapes from RÚIAN...")
@@ -28,9 +27,9 @@ xml_global <- tryCatch(
 # 2. CORE ENGINE
 # ==============================================================================
 create_senate_map <- function(target_so_id,
-                                           municipality_cache = all_municipalities_polygons,
-                                           quarter_cache      = all_quarters_polygons,
-                                           date) {
+                              municipality_cache = all_municipalities_polygons,
+                              quarter_cache      = all_quarters_polygons,
+                              date) {
   
   xml_district <- tryCatch(
     read_xml(paste0(
@@ -93,11 +92,18 @@ create_senate_map <- function(target_so_id,
     list_rbind() %>%
     left_join(candidate_registry, by = "candidate_id")
   
-  # C. Top-3 tooltip table (NYT style, matching KV map)
+  # C. Per-district candidate palette — built here so tooltip and map share it
+  all_candidates    <- unique(election_long$candidate_name)
+  candidate_palette <- set_names(scales::hue_pal()(length(all_candidates)), all_candidates)
+  
+  # D. Top-3 tooltip table (NYT style, matching KV map)
   top3_tooltips <- election_long %>%
     group_by(borough_code, kolo) %>%
     arrange(desc(votes), .by_group = TRUE) %>%
-    mutate(pct = votes / total_turnout) %>%
+    mutate(
+      pct            = votes / total_turnout,
+      ribbon_colour  = coalesce(candidate_palette[candidate_name], "#AAAAAA")
+    ) %>%
     slice_head(n = 3) %>%
     summarise(
       rank_html = paste0(
@@ -112,7 +118,7 @@ create_senate_map <- function(target_so_id,
           "<tr style='font-size:12px;'>",
           "<td style='padding:3px 6px 3px 0;'>",
           "<span style='display:inline-block; width:4px; height:14px;",
-          " background-color:#AAAAAA",          # candidates have no fixed party colour
+          " background-color:", ribbon_colour,
           "; margin-right:5px; vertical-align:middle; border-radius:1px;'></span>",
           candidate_name, "</td>",
           "<td style='padding:3px 4px; text-align:right; color:#444444;'>",
@@ -169,10 +175,6 @@ create_senate_map <- function(target_so_id,
     warning(sprintf("%d code(s) matched no geometry: %s",
                     length(unresolved), paste(unresolved, collapse = ", ")))
   
-  # F. Per-round palette (candidates vary by district — generate from data)
-  all_candidates    <- unique(processed_rounds$winner_short)
-  candidate_palette <- set_names(scales::hue_pal()(length(all_candidates)), all_candidates)
-  
   # G. Render each round via shared create_bubble_map()
   build_round <- function(target_kolo) {
     round_results <- processed_rounds %>% filter(kolo == target_kolo)
@@ -181,23 +183,40 @@ create_senate_map <- function(target_so_id,
       results  = round_results,
       polygons = district_polygons_sf,
       palette  = candidate_palette,
-      title    = sprintf("Senátní volby — Obvod %s", target_so_id),
-      subtitle = sprintf("Kolo %d — Velikost bubliny = absolutní náskok; sytost = relativní náskok",
+      title    = sprintf("Senátní obvod č. %s", target_so_id),
+      subtitle = sprintf("%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)",
                          target_kolo),
-      caption  = "Zdroj: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
+      caption  = "Zdroj: github.com/jfronc | Data: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
     )
   }
   
   list(
-    round_1 = build_round(1),
-    round_2 = build_round(2)
+    r1 = build_round(1),
+    r2 = build_round(2)
   )
 }
 
 # ==============================================================================
 # 3. RUNTIME
 # ==============================================================================
-district_maps <- create_senate_map(target_so_id = 48, date = date)
+district_maps <- create_senate_map(target_so_id = 54, date = date)
 
-district_maps$round_1
-district_maps$round_2
+district_maps$r1
+district_maps$r2
+
+class_c <- seq(3, 81, by = 3)
+
+library(htmlwidgets)
+
+for (i in class_c) {
+  maps <- create_senate_map(target_so_id = i, date = date)
+  
+  iwalk(maps, \(widget, name) {
+    saveWidget(
+      widget = widget,
+      file = glue::glue("Senát/maps/2020/{i}_{name}.html"),
+      selfcontained = FALSE,
+      libdir = "lib"
+    )
+  })
+}
