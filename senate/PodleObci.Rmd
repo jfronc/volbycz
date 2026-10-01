@@ -1,6 +1,6 @@
 ---
 params:
-  so: 33
+  so: 12
   volby_date: "20201002"
 output: html_document
 ---
