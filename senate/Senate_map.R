@@ -199,24 +199,24 @@ create_senate_map <- function(target_so_id,
 # ==============================================================================
 # 3. RUNTIME
 # ==============================================================================
-district_maps <- create_senate_map(target_so_id = 54, date = date)
-
-district_maps$r1
-district_maps$r2
-
-class_c <- seq(3, 81, by = 3)
-
-library(htmlwidgets)
-
-for (i in class_c) {
-  maps <- create_senate_map(target_so_id = i, date = date)
-  
-  iwalk(maps, \(widget, round) {
-    saveWidget(
-      widget = widget,
-      file = glue::glue("docs/senate/2020/{i}_{round}.html"),
-      selfcontained = FALSE,
-      libdir = "lib"
-    )
-  })
-}
+# district_maps <- create_senate_map(target_so_id = 54, date = date)
+# 
+# district_maps$r1
+# district_maps$r2
+# 
+# class_c <- seq(3, 81, by = 3)
+# 
+# library(htmlwidgets)
+# 
+# for (i in class_c) {
+#   maps <- create_senate_map(target_so_id = i, date = date)
+#   
+#   iwalk(maps, \(widget, round) {
+#     saveWidget(
+#       widget = widget,
+#       file = glue::glue("docs/senate/2020/{i}_{round}.html"),
+#       selfcontained = FALSE,
+#       libdir = "lib"
+#     )
+#   })
+# }
