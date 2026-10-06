@@ -77,7 +77,7 @@ create_bubble_map <- function(results,
       opts_tooltip(css = "background-color:none; border:none; box-shadow:none;"),
       opts_hover(css   = "stroke:#111111; stroke-width:1.5px; cursor:pointer;"),
       opts_sizing(
-        rescale = TRUE,      # Crucial: enables SVG viewBox scaling!
+        rescale = FALSE,      # Crucial: enables SVG viewBox scaling!
         width = 1            # 100% of the iframe width
       ),
       opts_toolbar(saveaspng = FALSE) # disable download
