@@ -2,7 +2,8 @@
 # 1. ENVIRONMENT INITIALIZATION & ONE-TIME GLOBAL LOOKUPS
 # ==============================================================================
 xfun::pkg_attach("tidyverse", "magrittr", "xml2", "RCzechia", "sf", "scales", "ggiraph")
-source("utils/bubble_map.R")
+gh <- "https://raw.githubusercontent.com/jfronc/volbycz/main/"
+source(paste0(gh, "utils/bubble_map.R"))
 
 message("Caching administrative shapes from RÚIAN...")
 all_municipalities_polygons <- obce_polygony() %>%
@@ -183,8 +184,8 @@ create_senate_map <- function(target_so_id,
       results  = round_results,
       polygons = district_polygons_sf,
       palette  = candidate_palette,
-#      title    = sprintf("Senátní obvod č. %s", target_so_id),
-#      subtitle = sprintf("%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)", target_kolo),
+      title    = sprintf("Senátní obvod č. %s", target_so_id),
+      subtitle = sprintf("%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)", target_kolo),
       caption  = "Zdroj: github.com/jfronc | Data: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
     )
   }
