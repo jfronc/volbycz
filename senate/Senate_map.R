@@ -183,9 +183,8 @@ create_senate_map <- function(target_so_id,
       results  = round_results,
       polygons = district_polygons_sf,
       palette  = candidate_palette,
-      title    = sprintf("Senátní obvod č. %s", target_so_id),
-      subtitle = sprintf("%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)",
-                         target_kolo),
+#      title    = sprintf("Senátní obvod č. %s", target_so_id),
+#      subtitle = sprintf("%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)", target_kolo),
       caption  = "Zdroj: github.com/jfronc | Data: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
     )
   }
@@ -211,10 +210,10 @@ library(htmlwidgets)
 for (i in class_c) {
   maps <- create_senate_map(target_so_id = i, date = date)
   
-  iwalk(maps, \(widget, name) {
+  iwalk(maps, \(widget, round) {
     saveWidget(
       widget = widget,
-      file = glue::glue("Senát/maps/2020/{i}_{name}.html"),
+      file = glue::glue("docs/senate/2020/{i}_{round}.html"),
       selfcontained = FALSE,
       libdir = "lib"
     )
