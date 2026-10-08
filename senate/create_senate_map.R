@@ -3,6 +3,7 @@ xfun::pkg_attach("tidyverse", "magrittr", "sf", "scales", "ggiraph")
 create_senate_map <- function(target_so_id,
                               municipality_cache = all_municipalities_polygons,
                               quarter_cache      = all_quarters_polygons,
+                              xml_global,
                               date) {
 
   xml_district <- tryCatch(
