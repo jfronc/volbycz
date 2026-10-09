@@ -1,6 +1,6 @@
 xfun::pkg_attach("tidyverse", "magrittr", "sf", "scales", "ggiraph")
 
-parse_senate_district <- function(target_so_id, xml_global, xml_district) {
+parse_senate_district <- function(target_so_id, date, xml_global, xml_district) {
 
   ns <- c(default = "http://www.volby.cz/senat/")
   
