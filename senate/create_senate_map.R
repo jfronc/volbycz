@@ -70,17 +70,18 @@ create_senate_map <- function(target_so_id,
                               district_data,
                               municipality_cache,
                               quarter_cache) {
-  # C. Per-district candidate palette — built here so tooltip and map share it
-  all_candidates    <- unique(election_long$candidate_name)
+  
+  # C. Candidate palette — shared between tooltips and map fill
+  all_candidates    <- unique(district_data$candidate_name)
   candidate_palette <- set_names(scales::hue_pal()(length(all_candidates)), all_candidates)
   
-  # D. Top-3 tooltip table (NYT style, matching KV map)
-  top3_tooltips <- election_long %>%
+  # D. Top-3 tooltips
+  top3_tooltips <- district_data %>%
     group_by(borough_code, kolo) %>%
     arrange(desc(votes), .by_group = TRUE) %>%
     mutate(
-      pct            = votes / total_turnout,
-      ribbon_colour  = coalesce(candidate_palette[candidate_name], "#AAAAAA")
+      pct           = votes / total_turnout,
+      ribbon_colour = coalesce(candidate_palette[candidate_name], "#AAAAAA")
     ) %>%
     slice_head(n = 3) %>%
     summarise(
@@ -112,14 +113,14 @@ create_senate_map <- function(target_so_id,
       .groups = "drop"
     )
   
-  # D. Margins per round
-  processed_rounds <- election_long %>%
+  # E. Margins per round
+  processed_rounds <- district_data %>%
     group_by(borough_code, obec_name, kolo) %>%
     arrange(desc(votes), .by_group = TRUE) %>%
     summarise(
       abs_vote_margin = if_else(n() > 1, first(votes) - nth(votes, 2), first(votes)),
       pct_margin      = abs_vote_margin / first(total_turnout),
-      winner_short    = first(candidate_name),   # candidate name as the fill key
+      winner_short    = first(candidate_name),
       total_turnout   = first(total_turnout),
       .groups = "drop"
     ) %>%
@@ -138,7 +139,7 @@ create_senate_map <- function(target_so_id,
       )
     )
   
-  # E. Geometry reconciliation: quarters first, municipalities as fallback
+  # F. Geometry reconciliation
   unique_codes         <- unique(processed_rounds$borough_code)
   district_polygons_sf <- quarter_cache %>% filter(borough_code %in% unique_codes)
   missing_codes        <- setdiff(unique_codes, district_polygons_sf$borough_code)
@@ -153,22 +154,20 @@ create_senate_map <- function(target_so_id,
     warning(sprintf("%d code(s) matched no geometry: %s",
                     length(unresolved), paste(unresolved, collapse = ", ")))
   
-  # G. Render each round via shared create_bubble_map()
+  # G. Render
   build_round <- function(target_kolo) {
-    round_results <- processed_rounds %>% filter(kolo == target_kolo)
-    
     create_bubble_map(
-      results  = round_results,
+      results  = processed_rounds %>% filter(kolo == target_kolo),
       polygons = district_polygons_sf,
       palette  = candidate_palette,
       title    = sprintf("Senátní obvod č. %s", target_so_id),
-      subtitle = sprintf("%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)", target_kolo),
+      subtitle = sprintf(
+        "%d. kolo (velikost bubliny = absolutní náskok; sytost = relativní náskok)",
+        target_kolo
+      ),
       caption  = "Zdroj: github.com/jfronc | Data: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
     )
   }
   
-  list(
-    r1 = build_round(1),
-    r2 = build_round(2)
-  )
+  list(r1 = build_round(1), r2 = build_round(2))
 }
