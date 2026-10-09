@@ -1,11 +1,9 @@
 xfun::pkg_attach("tidyverse", "magrittr", "sf", "scales", "ggiraph")
 
-create_senate_map <- function(target_so_id,
-                              municipality_cache = all_municipalities_polygons,
-                              quarter_cache      = all_quarters_polygons,
-                              xml_global,
-                              date) {
+parse_senate_district <- function(target_so_id, xml_global, xml_district) {
 
+  ns <- c(default = "http://www.volby.cz/senat/")
+  
   xml_district <- tryCatch(
     read_xml(paste0(
       "https://volby.gov.cz/appdata/senat/", date,
@@ -66,7 +64,12 @@ create_senate_map <- function(target_so_id,
     keep(~ !is.null(.x)) %>%
     list_rbind() %>%
     left_join(candidate_registry, by = "candidate_id")
-  
+}
+
+create_senate_map <- function(target_so_id,
+                              district_data,
+                              municipality_cache,
+                              quarter_cache) {
   # C. Per-district candidate palette — built here so tooltip and map share it
   all_candidates    <- unique(election_long$candidate_name)
   candidate_palette <- set_names(scales::hue_pal()(length(all_candidates)), all_candidates)
