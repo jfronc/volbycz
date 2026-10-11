@@ -1,9 +1,10 @@
 xfun::pkg_attach("tidyverse", "magrittr", "sf", "scales", "ggiraph")
 
-parse_senate_district <- function(target_so_id, date, xml_global, xml_district) {
+parse_senate_district <- function(target_so_id, date, xml_global, xml_district = NA) {
 
   ns <- c(default = "http://www.volby.cz/senat/")
   
+  if (is.na(xml_district)) {
   xml_district <- tryCatch(
     read_xml(paste0(
       "https://volby.gov.cz/appdata/senat/", date,
@@ -12,6 +13,7 @@ parse_senate_district <- function(target_so_id, date, xml_global, xml_district) 
     error = function(e)
       stop(sprintf("CRITICAL: Failed to download XML for Senate District %s.", target_so_id))
   )
+  }
   
   # A. Candidate registry (deterministic order)
   district_node <- xml_find_first(
@@ -155,6 +157,8 @@ create_senate_map <- function(target_so_id,
                     length(unresolved), paste(unresolved, collapse = ", ")))
   
   # G. Render
+  available_rounds <- unique(processed_rounds$kolo)
+  
   build_round <- function(target_kolo) {
     create_bubble_map(
       results  = processed_rounds %>% filter(kolo == target_kolo),
@@ -169,5 +173,7 @@ create_senate_map <- function(target_so_id,
     )
   }
   
-  list(r1 = build_round(1), r2 = build_round(2))
+  out <- list(r1 = build_round(1))
+  if (2 %in% available_rounds) out$r2 <- build_round(2)
+  out
 }
