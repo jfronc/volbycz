@@ -42,8 +42,10 @@ parse_senate_district <- function(target_so_id, date, xml_global, xml_district =
       
       turnout_map <- xml_find_all(obec_node, ".//default:UCAST", ns) %>%
         map(\(u) tibble(
-          kolo          = as.numeric(xml_attr(u, "KOLO")),
-          total_turnout = as.numeric(xml_attr(u, "PLATNE_HLASY"))
+          kolo           = as.numeric(xml_attr(u, "KOLO")),
+          total_turnout  = as.numeric(xml_attr(u, "PLATNE_HLASY")),
+          counted        = as.numeric(xml_attr(u, "OKRSKY_ZPRAC_PROC")),
+          zapsani_volici = as.numeric(xml_attr(u, "ZAPSANI_VOLICI"))
         )) %>%
         list_rbind()
       
@@ -124,6 +126,7 @@ create_senate_map <- function(target_so_id,
       pct_margin      = abs_vote_margin / first(total_turnout),
       winner_short    = first(candidate_name),
       total_turnout   = first(total_turnout),
+      counted         = first(counted),
       .groups = "drop"
     ) %>%
     left_join(top3_tooltips, by = c("borough_code", "kolo")) %>%
@@ -134,8 +137,8 @@ create_senate_map <- function(target_so_id,
         " box-shadow:0 2px 6px rgba(0,0,0,0.12); min-width:230px;'>",
         "<div style='font-size:13px; font-weight:bold; color:#111111; margin-bottom:1px;'>",
         obec_name, " (Kolo ", kolo, ")</div>",
-        "<div style='font-size:10px; color:#999999; margin-bottom:2px;'>",
-        format(total_turnout, big.mark = "\u00a0"), " platných hlasů</div>",
+        "<div style='font-size:10px; color:#999999; margin-bottom:1px;'>",
+        format(total_turnout, big.mark = "\u00a0"), " platných hlasů (sečteno", counted, " %)</div>",
         rank_html,
         "</div>"
       )

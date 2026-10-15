@@ -1,8 +1,13 @@
 # ==============================================================================
 # 1. ENVIRONMENT INITIALIZATION & GEOGRAPHIC CACHE
 # ==============================================================================
-xfun::pkg_attach(c("tidyverse", "magrittr", "RCzechia", "sf", "scales", "ggiraph", "readxl"))
+xfun::pkg_attach(c("tidyverse", "magrittr", "RCzechia", "sf", "scales", "ggiraph", "readxl", "glue"))
 source("utils/parties.R")
+
+yr <- 2026
+# date <- "20260328"
+date <- "20261011"
+
 
 message("Loading and caching Prague city borough boundaries...")
 all_prague_boroughs <- casti() %>%
@@ -15,7 +20,7 @@ all_prague_boroughs <- casti() %>%
 # 2. DOWNLOAD AND EXTRACTION PIPELINE
 # ==============================================================================
 download.file(
-  url      = "https://volby.gov.cz/opendata/kv2022/KV2022_data_20260328_xlsx.zip",
+  url      = glue("https://volby.gov.cz/opendata/kv{yr}/KV{yr}_data_{date}_xlsx.zip"),
   destfile = zip_tmp <- tempfile(fileext = ".zip"),
   mode     = "wb",
   quiet    = TRUE
@@ -25,7 +30,7 @@ kvhl <- unzip(zip_tmp, files = "kvhl.xlsx", exdir = tempdir()) |> read_excel()
 kvt3 <- unzip(zip_tmp, files = "kvt3.xlsx", exdir = tempdir()) |> read_excel()
 
 kvhl %<>%
-  filter(KRAJ == 1100 & TYPZASTUP == 1) %>%
+  filter(OKRES == 1100 & TYPZASTUP == 1) %>%
   select(OBEC, POR_STR_HL, POC_HLASU) %>%
   summarise(
     POC_HLASU2 = sum(POC_HLASU, na.rm = TRUE),
@@ -39,7 +44,7 @@ kvhl %<>%
 # POR_STR_HL ballot order is scoped to one KODZASTUP, so filtering to 554782
 # gives the correct party-name lookup for all borough rows in kvhl
 kvros <- readr::read_csv2(
-  file           = "https://volby.gov.cz/opendata/kv2022/csv/kvros.csv",
+  file           = glue("https://volby.gov.cz/opendata/kv{yr}/csv/kvros.csv"),
   locale         = locale(encoding = "CP1250"),
   show_col_types = FALSE
 )
@@ -64,7 +69,7 @@ kvhl %<>%
 # 5. TURNOUT PER BOROUGH
 # ==============================================================================
 borough_turnout <- kvt3 %>%
-  filter(KRAJ == 1100, TYPZASTUP == 1) %>%
+  filter(OKRES == 1100, TYPZASTUP == 1) %>%
   summarise(
     total_valid_votes = sum(PL_HL_CELK, na.rm = TRUE),
     .by = OBEC
@@ -177,7 +182,7 @@ prague_map <- create_bubble_map(
   results  = borough_results,
   polygons = all_prague_boroughs,
   palette  = parties_palette,
-  title    = "Volby do zastupitelstva HMP 2022",
+  title    = paste("Volby do zastupitelstva HMP", yr),
   subtitle = "Vítězové dle MČ. Velikost bubliny = absolutní náskok; sytost = relativní náskok",
   caption  = "Zdroj: \u010cS\u00da (volby.cz) opendata | Geometrie: RCzechia::casti()"
 )
