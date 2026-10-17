@@ -83,3 +83,93 @@ create_bubble_map <- function(results,
     height_svg = 5.5
   )
 }
+
+create_bubble_map_live <- function(results,
+                                   polygons,
+                                   palette,
+                                   title    = "",
+                                   subtitle = "",
+                                   caption  = "") {
+  
+  polygons_sf <- polygons %>%
+    inner_join(results, by = "borough_code")
+  
+  unmatched_geo <- setdiff(results$borough_code, polygons_sf$borough_code)
+  if (length(unmatched_geo) > 0)
+    warning(sprintf("No geometry for %d unit(s): %s",
+                    length(unmatched_geo), paste(unmatched_geo, collapse = ", ")))
+  
+  points_sf  <- polygons_sf %>% st_centroid()
+  bubbles_sf <- points_sf %>% filter(!is.na(winner_short))   # leader bubbles
+  rings_sf   <- points_sf %>% filter(!is_complete)           # outstanding-vote rings
+  
+  max_size <- max(c(bubbles_sf$abs_vote_margin, rings_sf$pending_voters), na.rm = TRUE)
+  
+  missing_parties <- setdiff(unique(bubbles_sf$winner_short), names(palette))
+  if (length(missing_parties) > 0)
+    message("Winners with no palette entry (will render grey): ",
+            paste(missing_parties, collapse = "; "))
+  
+  map_gg <- ggplot() +
+    # counted cities: pale fill as before
+    geom_sf(
+      data = polygons_sf %>% filter(is_complete),
+      fill = "#FAFAFA", color = "#DCDCDC", linewidth = 0.4
+    ) +
+    # uncounted / partially counted: NYT-style grey with dashed outline
+    geom_sf(
+      data = polygons_sf %>% filter(!is_complete),
+      fill = "#EAEAEA", color = "#9A9A9A", linewidth = 0.4, linetype = "dashed"
+    ) +
+    # rings first so partial-count leader bubbles sit on top
+    geom_sf_interactive(
+      data = rings_sf,
+      aes(size = pending_voters, tooltip = tooltip_text, data_id = borough_code),
+      shape = 21, fill = NA, color = "#555555", stroke = 0.7
+    ) +
+    geom_sf_interactive(
+      data = bubbles_sf,
+      aes(
+        size    = abs_vote_margin,
+        fill    = winner_short,
+        alpha   = pct_margin,
+        tooltip = tooltip_text,
+        data_id = borough_code
+      ),
+      shape = 21, color = "#FFFFFF", stroke = 0.4
+    ) +
+    scale_size_area(max_size = 14, limits = c(0, max_size), guide = "none") +
+    scale_fill_manual(values = palette, name = "Vítěz", na.value = "grey60") +
+    scale_alpha_continuous(range = c(0.40, 0.95), guide = "none") +
+    labs(
+      title    = if (nchar(title) > 0) title else NULL,
+      subtitle = if (nchar(subtitle) > 0) subtitle else NULL,
+      caption  = caption
+    ) +
+    theme_minimal(base_family = "sans") +
+    theme(
+      panel.grid      = element_blank(),
+      axis.text       = element_blank(),
+      axis.title      = element_blank(),
+      plot.title      = element_text(face = "bold", size = 13),
+      plot.subtitle   = element_text(size = 8, colour = "#666666"),
+      plot.margin     = margin(0, 0, 0, 0),
+      legend.title    = element_text(face = "bold", size = 11),
+      legend.text     = element_text(size = 10),
+      legend.box      = "vertical",
+      legend.position = "right"
+    ) +
+    coord_sf(datum = NA)
+  
+  girafe(
+    ggobj   = map_gg,
+    options = list(
+      opts_tooltip(css = "background-color:none; border:none; box-shadow:none;"),
+      opts_hover(css   = "stroke:#111111; stroke-width:1.5px; cursor:pointer;"),
+      opts_sizing(rescale = TRUE),
+      opts_toolbar(saveaspng = FALSE)
+    ),
+    width_svg  = 7.5,
+    height_svg = 5.5
+  )
+}

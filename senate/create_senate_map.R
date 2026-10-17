@@ -1,6 +1,7 @@
 xfun::pkg_attach("tidyverse", "magrittr", "sf", "scales", "ggiraph")
 
-parse_senate_district <- function(target_so_id, date, xml_global, xml_district = NA) {
+parse_senate_district <- function(target_so_id, date, xml_global, xml_district = NA,
+                                  keep_uncounted = FALSE) {
 
   ns <- c(default = "http://www.volby.cz/senat/")
   
@@ -50,19 +51,24 @@ parse_senate_district <- function(target_so_id, date, xml_global, xml_district =
         list_rbind()
       
       hlasy_nodes <- xml_find_all(obec_node, ".//default:HLASY", ns)
-      if (length(hlasy_nodes) == 0) return(NULL)
+      if (length(hlasy_nodes) == 0 && !keep_uncounted) return(NULL)
       
-      hlasy_nodes %>%
-        map(\(h) tibble(
-          candidate_id = as.numeric(xml_attr(h, "PORADOVE_CISLO")),
-          votes_r1     = as.numeric(xml_attr(h, "HLASY_1KOLO")),
-          votes_r2     = as.numeric(xml_attr(h, "HLASY_2KOLO"))
-        )) %>%
-        list_rbind() %>%
-        pivot_longer(c(votes_r1, votes_r2), names_to = "round_label", values_to = "votes") %>%
-        mutate(kolo = if_else(round_label == "votes_r1", 1L, 2L)) %>%
-        filter(!is.na(votes), votes > 0) %>%
-        inner_join(turnout_map, by = "kolo") %>%
+      hlasy_long <- if (length(hlasy_nodes) > 0) {       
+        hlasy_nodes %>%
+          map(\(h) tibble(
+            candidate_id = as.numeric(xml_attr(h, "PORADOVE_CISLO")),
+            votes_r1     = as.numeric(xml_attr(h, "HLASY_1KOLO")),
+            votes_r2     = as.numeric(xml_attr(h, "HLASY_2KOLO"))
+          )) %>%
+          list_rbind() %>%
+          pivot_longer(c(votes_r1, votes_r2), names_to = "round_label", values_to = "votes") %>%
+          mutate(kolo = if_else(round_label == "votes_r1", 1L, 2L)) %>%
+          filter(!is.na(votes), votes > 0)
+      } else tibble(candidate_id = numeric(), votes = numeric(), kolo = integer())
+      
+      hlasy_long %>%                            
+        { if (keep_uncounted) right_join(., turnout_map, by = "kolo")
+          else                inner_join(., turnout_map, by = "kolo") } %>%
         mutate(borough_code = obec_code, obec_name = obec_name)
     }) %>%
     keep(~ !is.null(.x)) %>%
@@ -179,4 +185,135 @@ create_senate_map <- function(target_so_id,
   out <- list(r1 = build_round(1))
   if (2 %in% available_rounds) out$r2 <- build_round(2)
   out
+}
+
+create_senate_map_live <- function(target_so_id,
+                                   district_data,
+                                   municipality_cache,
+                                   quarter_cache) {
+  
+  # C. Palette
+  all_candidates    <- unique(na.omit(district_data$candidate_name))
+  candidate_palette <- set_names(scales::hue_pal()(length(all_candidates)), all_candidates)
+  
+  # D. Top-3 tooltips (round 2, cities with votes only)
+  top3_tooltips <- district_data %>%
+    filter(kolo == 2, !is.na(votes)) %>%
+    group_by(borough_code, kolo) %>%
+    arrange(desc(votes), .by_group = TRUE) %>%
+    mutate(
+      pct           = votes / total_turnout,
+      ribbon_colour = coalesce(candidate_palette[candidate_name], "#AAAAAA")
+    ) %>%
+    slice_head(n = 3) %>%
+    summarise(
+      rank_html = paste0(
+        "<table style='border-collapse:collapse; width:230px; margin-top:6px;",
+        " border-top:2px solid #E2E2E2; font-family:Georgia,serif;'>",
+        "<tr style='font-size:10px; color:#999999;'>",
+        "<td style='padding:2px 6px 2px 0; width:100%;'>Kandidát</td>",
+        "<td style='padding:2px 4px; text-align:right;'>Hlasy</td>",
+        "<td style='padding:2px 0 2px 4px; text-align:right;'>%</td>",
+        "</tr>",
+        paste0(
+          "<tr style='font-size:12px;'>",
+          "<td style='padding:3px 6px 3px 0;'>",
+          "<span style='display:inline-block; width:4px; height:14px;",
+          " background-color:", ribbon_colour,
+          "; margin-right:5px; vertical-align:middle; border-radius:1px;'></span>",
+          candidate_name, "</td>",
+          "<td style='padding:3px 4px; text-align:right; color:#444444;'>",
+          format(votes, big.mark = "\u00a0"), "</td>",
+          "<td style='padding:3px 0 3px 4px; text-align:right; font-weight:bold;",
+          " white-space:nowrap;'>",
+          round(pct * 100, 1), " %</td>",
+          "</tr>",
+          collapse = ""
+        ),
+        "</table>"
+      ),
+      .groups = "drop"
+    )
+  
+  # E. One row per city: registered voters in both rounds + round-2 leader (if any)
+  city_info <- district_data %>%
+    distinct(borough_code, obec_name) %>%
+    left_join(
+      district_data %>% filter(kolo == 1) %>%
+        distinct(borough_code, zapsani_r1 = zapsani_volici),
+      by = "borough_code"
+    ) %>%
+    left_join(
+      district_data %>% filter(kolo == 2) %>%
+        distinct(borough_code, zapsani_r2 = zapsani_volici, counted),
+      by = "borough_code"
+    ) %>%
+    mutate(
+      counted        = coalesce(counted, 0),
+      zapsani_r2     = coalesce(zapsani_r2, 0),            # nothing counted yet = 0 registered counted
+      pending_voters = pmax(zapsani_r1 - zapsani_r2, 0),   # registered voters in precincts still to count
+      is_complete    = counted >= 100
+    )
+  
+  processed_rounds <- district_data %>%
+    filter(kolo == 2, !is.na(votes)) %>%
+    group_by(borough_code, kolo) %>%
+    arrange(desc(votes), .by_group = TRUE) %>%
+    summarise(
+      abs_vote_margin = if_else(n() > 1, first(votes) - nth(votes, 2), first(votes)),
+      pct_margin      = abs_vote_margin / first(total_turnout),
+      winner_short    = first(candidate_name),
+      total_turnout   = first(total_turnout),
+      .groups = "drop"
+    ) %>%
+    right_join(city_info, by = "borough_code") %>%
+    left_join(top3_tooltips, by = c("borough_code", "kolo")) %>%
+    mutate(
+      kolo = 2L,
+      tooltip_text = paste0(
+        "<div style='font-family:Georgia,serif; padding:10px 12px; background-color:#FFFFFF;",
+        " border:1px solid #CCCCCC; border-radius:3px;",
+        " box-shadow:0 2px 6px rgba(0,0,0,0.12); min-width:230px;'>",
+        "<div style='font-size:13px; font-weight:bold; color:#111111; margin-bottom:1px;'>",
+        obec_name, " (Kolo ", kolo, ")</div>",
+        "<div style='font-size:10px; color:#999999; margin-bottom:1px;'>",
+        if_else(is.na(total_turnout), "Zatím bez výsledků",
+                paste0(format(total_turnout, big.mark = "\u00a0"), " platných hlasů")),
+        " (sečteno ", counted, " %)</div>",
+        coalesce(rank_html, ""),
+        if_else(is_complete, "",
+                paste0("<div style='font-size:10px; color:#999999; margin-top:4px;'>",
+                       "Zbývá zapsaných voličů 1.–2. kolo: ",
+                       format(pending_voters, big.mark = "\u00a0"), "</div>")),
+        "</div>"
+      )
+    )
+  
+  # F. Geometry reconciliation (unchanged)
+  unique_codes         <- unique(processed_rounds$borough_code)
+  district_polygons_sf <- quarter_cache %>% filter(borough_code %in% unique_codes)
+  missing_codes        <- setdiff(unique_codes, district_polygons_sf$borough_code)
+  
+  if (length(missing_codes) > 0)
+    district_polygons_sf %<>% bind_rows(
+      municipality_cache %>% filter(borough_code %in% missing_codes)
+    )
+  
+  unresolved <- setdiff(unique_codes, district_polygons_sf$borough_code)
+  if (length(unresolved) > 0)
+    warning(sprintf("%d code(s) matched no geometry: %s",
+                    length(unresolved), paste(unresolved, collapse = ", ")))
+  
+  # G. Render
+  list(r2 = create_bubble_map_live(
+    results  = processed_rounds,
+    polygons = district_polygons_sf,
+    palette  = candidate_palette,
+    title    = sprintf("Senátní obvod č. %s", target_so_id),
+    subtitle = sprintf(
+      "2. kolo, sčítání probíhá: sečteno %d z %d obcí (plná bublina = absolutní náskok; prázdný kruh = zbývá sečíst, velikost = rozdíl zapsaných voličů 1. a 2. kola)",
+      sum(processed_rounds$is_complete), nrow(processed_rounds)
+    ),
+    caption  = "Zdroj: github.com/jfronc | Data: \u010cS\u00da (volby.cz) | Geometrie: RCzechia"
+  ))
 }
